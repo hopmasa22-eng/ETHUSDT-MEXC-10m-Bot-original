@@ -114,68 +114,83 @@ def agg(mins):
 
 class Engine:
     def __init__(self, state, state_file, symbol):
-        self.state=state
-        self.state_file=state_file
-        self.symbol=symbol
-        self.c=OrderedDict()
-        self.pending=[]
-        self.initialized=False
-        self.pre_alerted=set()
+        self.state = state
+        self.state_file = state_file
+        self.symbol = symbol
+        self.c = OrderedDict()
+        self.pending = []
+        self.initialized = False
+        self.pre_alerted = set()
 
     def seed(self, closed):
-        """Load current history without generating historical signals/results."""
-        self.c=OrderedDict((x['ts'], x) for x in closed[-150:])
-        self.c=OrderedDict(sorted(self.c.items()))
-        self.pending=[]
-        self.state['pending']=[]
-        self.state['last_processed_10m']=next(reversed(self.c)) if self.c else None
+        """Load history without generating historical signals/results."""
+        self.c = OrderedDict((x['ts'], x) for x in closed[-150:])
+        self.c = OrderedDict(sorted(self.c.items()))
+        # Do not carry stale pending setups from a previous code version.
+        self.pending = []
+        self.state['pending'] = []
+        self.state['last_processed_10m'] = next(reversed(self.c)) if self.c else None
         save_state(self.state, self.state_file)
-        self.initialized=True
+        self.initialized = True
         if self.c:
-            latest=next(reversed(self.c.values()))
-            log.info('INITIALIZED | history=%d | latest=%s %s | waiting for NEW 10m candle', len(self.c), utc(latest['ts']), color(latest))
+            latest = next(reversed(self.c.values()))
+            log.info('INITIALIZED | history=%d | latest=%s %s | waiting for NEW 10m candle',
+                     len(self.c), utc(latest['ts']), color(latest))
 
     def maybe_pre_alert(self, live10):
-        """At ~2 minutes before trigger close, warn when the live trigger is opposite the start."""
+        """Send PRE-ALERT only in the final minute while candle #8 is forming."""
         if not self.initialized or not live10:
             return
-        # Only send during the final ~2 minutes of the current 10m candle.
-        now=time.time()
-        elapsed=now-live10['ts']
-        if elapsed < 480 or elapsed >= 600:
+
+        now = time.time()
+        elapsed = now - live10['ts']
+        # 10-minute candle: only elapsed 9:00..9:59 is allowed.
+        if elapsed < 540 or elapsed >= 600:
             return
 
-        keys=list(self.c)
-        # Need the five prior closed candles plus the start candle; trigger is live.
-        # Current live candle is candle #6 after the candidate start.
-        target_ts=live10['ts']
+        target_ts = live10['ts']  # This live candle must be #8.
         if target_ts in self.c:
             return
-        s_ts=target_ts-6*600
-        if s_ts not in self.c:
-            return
-        sidx=keys.index(s_ts)
-        start=self.c[s_ts]
-        sc=color(start)
-        if sc not in ('GREEN','RED'):
-            return
-        # Start must be the last candle of its same-color run.
-        if sidx+1 < len(keys) and color(self.c[keys[sidx+1]]) == sc:
+
+        # START is eight 10-minute intervals before #8; #1 is START + 1 interval.
+        start_ts = target_ts - 8 * 600
+        c6_ts = target_ts - 2 * 600
+        c7_ts = target_ts - 1 * 600
+        if not all(ts in self.c for ts in (start_ts, c6_ts, c7_ts)):
             return
 
-        trig=color(live10)
-        if trig not in ('GREEN','RED') or trig == sc:
+        start = self.c[start_ts]
+        start_color = color(start)
+        if start_color not in ('GREEN', 'RED'):
+            return
+
+        # START must be the last candle of its color run: the next candle, #1,
+        # must not have the same color as START.
+        candle1_ts = start_ts + 600
+        if candle1_ts not in self.c or color(self.c[candle1_ts]) == start_color:
+            return
+
+        expected = 'RED' if start_color == 'GREEN' else 'GREEN'
+
+        # Candles #6 and #7 must be the opposite color; live #8 must also
+        # currently be that color for the early warning to be valid.
+        if color(self.c[c6_ts]) != expected or color(self.c[c7_ts]) != expected:
+            return
+        if color(live10) != expected:
             return
         if target_ts in self.pre_alerted:
             return
 
-        log.info('PRE-SIGNAL | start=%s %s | live trigger=%s %s | ~2m left', utc(start['ts']), sc, utc(target_ts), trig)
-        group_text=(f'**Всі готові?**\n'
-                     f'**Скоро дам СИГНАЛ!**\n\n'
-                     f'{self.symbol.replace("_USDT","USDT")} Futures\n'
-                     'Timeframe: 10m\n\n'
-                     '⚠️ Сигнал буде тільки після закриття свічки.')
-        # Pre-signal announcement is intended for the Telegram group only.
+        direction = 'LONG' if start_color == 'GREEN' else 'SHORT'
+        log.info('PRE-ALERT | %s | start=%s | candle #8 live=%s | final minute',
+                 direction, utc(start_ts), expected)
+        group_text = (
+            '**Ð£Ð²Ð°Ð³Ð°! Ð¡ÐºÐ¾ÑÐ¾ ÑÐ¸Ð³Ð½Ð°Ð»**\n\n'
+            f'{self.symbol.replace("_USDT", "USDT")} Futures\n'
+            'Timeframe: 10m\n\n'
+            'â ï¸ ÐÑÑÐ°ÑÐ¾ÑÐ½Ð¸Ð¹ ÑÐ¸Ð³Ð½Ð°Ð» Ð±ÑÐ´Ðµ ÑÑÐ»ÑÐºÐ¸ Ð¿ÑÑÐ»Ñ Ð¿Ð¾Ð²Ð½Ð¾Ð³Ð¾ Ð·Ð°ÐºÑÐ¸ÑÑÑ ÑÐ²ÑÑÐºÐ¸ #8.'
+        )
+        # Pre-alert is intended for Telegram groups only.
         tg('', group_text)
         self.pre_alerted.add(target_ts)
 
@@ -183,93 +198,135 @@ class Engine:
         if not self.initialized:
             self.seed(closed)
             return 0
-        known=set(self.c)
-        new=[x for x in closed if x['ts'] not in known]
+
+        known = set(self.c)
+        new = [x for x in closed if x['ts'] not in known]
         for x in new:
-            self.c[x['ts']]=x
-        self.c=OrderedDict(sorted(self.c.items()))
-        while len(self.c)>150:
+            self.c[x['ts']] = x
+        self.c = OrderedDict(sorted(self.c.items()))
+        while len(self.c) > 150:
             self.c.popitem(last=False)
         for x in new:
             self.evaluate(x['ts'])
         if new:
-            self.state['pending']=self.pending
-            self.state['last_processed_10m']=new[-1]['ts']
+            self.state['pending'] = self.pending
+            self.state['last_processed_10m'] = new[-1]['ts']
             save_state(self.state, self.state_file)
         return len(new)
 
     def evaluate(self, ts):
-        keys=list(self.c)
-        idx=keys.index(ts)
-        cur=self.c[ts]
+        keys = list(self.c)
+        idx = keys.index(ts)
+        cur = self.c[ts]
+        keep = []
 
-        # Pending signals: #6 is the trigger; #7 and #8 must stay the
-        # same color as #6. Result control is ONLY candles #9..#15.
-        keep=[]
+        # Existing setups: trigger is #6, #7/#8 confirm, #9-#15 score result.
         for p in self.pending:
-            rel=idx-p['trigger_idx']
+            rel = idx - p['trigger_idx']
+            trigger_color = p['trigger_color']
 
-            # #7 and #8 must match the trigger color. If either changes,
-            # the setup is invalid and no final signal is sent.
-            trigger_color=p['trigger_color']
-            if rel in (1, 2):
+            if rel in (1, 2):  # #7 and #8 must match #6
                 if color(cur) != trigger_color:
-                    log.info('CANCEL SETUP | start=%s | trigger=%s | candle=%d changed color', utc(p['start_ts']), trigger_color, rel+6)
+                    log.info('CANCEL SETUP | start=%s | candle #%d color changed',
+                             utc(p['start_ts']), rel + 6)
                 else:
-                    # After #8 closes successfully, send the final signal.
                     if rel == 2 and not p.get('signal_sent', False):
-                        signal_text=(f'SIGNAL {p["direction"]}\n\n{self.symbol.replace("_USDT","USDT")} Futures\nTimeframe: 10m\nStart: {kyiv(p["start_ts"])} Kyiv time\nTrigger: candle 6\n\nSignal only - no automatic trading.\n\nТрейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv')
-                        signal_group_text=(f'SIGNAL {p["direction"]}\n\n{self.symbol.replace("_USDT","USDT")} Futures\nTimeframe: 10m\nStart: {kyiv(p["start_ts"])} Kyiv time\n\nSignal only - no automatic trading.\n\nТрейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv')
+                        signal_text = (
+                            f'SIGNAL {p["direction"]}\n\n'
+                            f'{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                            'Timeframe: 10m\n'
+                            f'Start: {kyiv(p["start_ts"])} Kyiv time\n'
+                            'Signal after candle #8 close\n\n'
+                            'Signal only - no automatic trading.\n\n'
+                            'Ð¢ÑÐµÐ¹Ð´ÐµÑ ÐÐ°ÑÐ¸Ð»Ñ ÐÐ°Ð²Ð»ÑÐ²\n@vasylpavliv\nhttps://t.me/vasylpavliv'
+                        )
+                        signal_group_text = (
+                            f'SIGNAL {p["direction"]}\n\n'
+                            f'{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                            'Timeframe: 10m\n'
+                            f'Start: {kyiv(p["start_ts"])} Kyiv time\n\n'
+                            'Signal only - no automatic trading.\n\n'
+                            'Ð¢ÑÐµÐ¹Ð´ÐµÑ ÐÐ°ÑÐ¸Ð»Ñ ÐÐ°Ð²Ð»ÑÐ²\n@vasylpavliv\nhttps://t.me/vasylpavliv'
+                        )
                         tg(signal_text, signal_group_text)
-                        p['signal_sent']=True
+                        p['signal_sent'] = True
                     keep.append(p)
                 continue
 
-            # Result is checked only on candles #9..#15.
             if rel < 3:
                 keep.append(p)
                 continue
 
-            want='GREEN' if p['direction']=='LONG' else 'RED'
-            if rel <= 9 and color(cur)==want:
-                log.info('RESULT WIN | %s | start=%s | result candle=%d', p['direction'], utc(p['start_ts']), rel+6)
-                tg(f'WIN\n{self.symbol.replace('_USDT','USDT')} Futures\nDirection: {p["direction"]}\nResult candle: {rel+6}/15\n\nТрейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv')
+            # Result window is exactly candles #9 through #15 (rel 3..9).
+            favorable = 'GREEN' if p['direction'] == 'LONG' else 'RED'
+            unfavorable = 'RED' if p['direction'] == 'LONG' else 'GREEN'
+            if rel <= 9 and color(cur) == favorable:
+                log.info('RESULT WIN | %s | start=%s | result candle=%d',
+                         p['direction'], utc(p['start_ts']), rel + 6)
+                tg(
+                    f'WIN\n{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                    f'Direction: {p["direction"]}\nResult candle: {rel + 6}/15\n\n'
+                    'Ð¢ÑÐµÐ¹Ð´ÐµÑ ÐÐ°ÑÐ¸Ð»Ñ ÐÐ°Ð²Ð»ÑÐ²\n@vasylpavliv\nhttps://t.me/vasylpavliv'
+                )
+                # First favorable candle wins; stop checking this setup.
             elif rel >= 9:
-                log.info('RESULT LOSS | %s | start=%s | no confirmation in candles 9-15', p['direction'], utc(p['start_ts']))
-                tg(f'LOSS\n{self.symbol.replace('_USDT','USDT')} Futures\nDirection: {p["direction"]}\nNo confirmation in candles 9-15\n\nТрейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv')
+                # LOSS only if all seven candles #9-#15 were unfavorable.
+                result_candles = [self.c.get(p['trigger_ts'] + n * 600)
+                                  for n in range(3, 10)]
+                if all(c is not None and color(c) == unfavorable for c in result_candles):
+                    log.info('RESULT LOSS | %s | start=%s | all candles #9-#15 unfavorable',
+                             p['direction'], utc(p['start_ts']))
+                    tg(
+                        f'LOSS\n{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                        f'Direction: {p["direction"]}\nAll candles #9-#15 were {unfavorable.lower()}\n\n'
+                        'Ð¢ÑÐµÐ¹Ð´ÐµÑ ÐÐ°ÑÐ¸Ð»Ñ ÐÐ°Ð²Ð»ÑÐ²\n@vasylpavliv\nhttps://t.me/vasylpavliv'
+                    )
+                else:
+                    log.info('NO WIN/LOSS BY STRICT RULE | %s | start=%s | doji or incomplete result window',
+                             p['direction'], utc(p['start_ts']))
+                # Window is finished; do not keep this setup alive.
             else:
                 keep.append(p)
-        self.pending=keep
 
-        # Start can be either:
-        #   1) an isolated GREEN/RED candle, or
-        #   2) the LAST candle of a consecutive run of the same color.
-        #
-        # Trigger is exactly the 6th subsequent candle. Candles #7 and #8
-        # must keep the same color as the trigger. Candles #9..#15 are
-        # reserved only for the result check.
-        if idx<6:
+        self.pending = keep
+
+        # START is separate from the numbered sequence. #1 is the next candle,
+        # therefore #6 is six 10-minute intervals after START.
+        if idx < 6:
             return
-        sidx=idx-6
-        start=self.c[keys[sidx]]
-        sc=color(start)
-        if sc not in ('GREEN','RED'):
+        sidx = idx - 6
+        start = self.c[keys[sidx]]
+        start_color = color(start)
+        if start_color not in ('GREEN', 'RED'):
             return
 
-        # If the next candle has the same color, this is NOT the last candle
-        # of the run, so this candidate start is ignored. If the next candle
-        # is opposite color or DOJI, this candle IS the last one of its run.
-        if sidx+1 < len(keys) and color(self.c[keys[sidx+1]]) == sc:
+        # START must be the last candle of its color run. The following candle
+        # is #1; if #1 has START's color, START was not the last of the run.
+        if sidx + 1 >= len(keys):
+            return
+        candle1 = self.c[keys[sidx + 1]]
+        if color(candle1) == start_color:
             return
 
-        trig=color(self.c[keys[idx]])
-        direction='LONG' if sc=='GREEN' and trig=='RED' else 'SHORT' if sc=='RED' and trig=='GREEN' else None
-        if not direction:
+        trigger = color(cur)
+        expected = 'RED' if start_color == 'GREEN' else 'GREEN'
+        if trigger != expected:
             return
-        if any(p['start_ts']==start['ts'] for p in self.pending):
+
+        direction = 'LONG' if start_color == 'GREEN' else 'SHORT'
+        if any(p['start_ts'] == start['ts'] for p in self.pending):
             return
-        log.info('TRIGGER CANDIDATE %s | start=%s %s | trigger=%s %s | waiting for #7-#8', direction, utc(start['ts']), sc, utc(ts), trig)
-        self.pending.append({'start_ts':start['ts'], 'trigger_idx':idx, 'trigger_color':trig, 'direction':direction, 'signal_sent':False})
+
+        log.info('TRIGGER CANDIDATE %s | start=%s %s | candle #6=%s | waiting for #7-#8',
+                 direction, utc(start['ts']), start_color, trigger)
+        self.pending.append({
+            'start_ts': start['ts'],
+            'trigger_idx': idx,
+            'trigger_ts': ts,
+            'trigger_color': trigger,
+            'direction': direction,
+            'signal_sent': False,
+        })
 
 engines={}
 for sym in SYMBOLS:
@@ -277,10 +334,10 @@ for sym in SYMBOLS:
     engines[sym]=Engine(load_state(sf), sf, sym)
 
 def main():
-    log.info('Started BTCUSDT + ETHUSDT 10m signal bot v4-fixed (REST polling)')
+    log.info('Started BTCUSDT + ETHUSDT 10m signal bot (corrected #1-#15 rules)')
     log.info('Config: poll=%ss, chats=%d, token_configured=%s', POLL, len(CHAT_IDS), bool(TOKEN))
     log.info('Symbols: %s', ', '.join(SYMBOLS))
-    log.info('Rule: #1 Start | #6 trigger | #7-#8 same color as #6 | #9-#15 result')
+    log.info('Rule: START separate; #1 follows START | #6-#8 opposite color (all same) | PRE-ALERT final minute of #8 | #9-#15 result')
     if TOKEN and CHAT_IDS:
         tg('BOT ONLINE\nBTCUSDT + ETHUSDT Futures\nSignal bot is active.\nThis test confirms Telegram delivery to all configured chats.')
     last_log={}
