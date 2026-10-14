@@ -236,7 +236,6 @@ class Engine:
                             f'{self.symbol.replace("_USDT", "USDT")} Futures\n'
                             'Timeframe: 10m\n'
                             f'Start: {kyiv(p["start_ts"])} Kyiv time\n'
-                            'Confirmed: candles #6, #7, #8\n\n'
                             'Signal only - no automatic trading.\n\n'
                             'Трейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv'
                         )
