@@ -232,13 +232,13 @@ class Engine:
                 else:
                     if rel == 2 and not p.get('signal_sent', False):
                         signal_text = (
-                            f'SIGNAL {p["direction"]}\\n\\n'
-                            f'{self.symbol.replace("_USDT", "USDT")} Futures\\n'
-                            'Timeframe: 10m\\n'
-                            f'Start: {kyiv(p["start_ts"])} Kyiv time\\n'
-                            'Confirmed: candles #6, #7, #8\\n\\n'
-                            'Signal only - no automatic trading.\\n\\n'
-                            'Трейдер Василь Павлів\\n@vasylpavliv\\nhttps://t.me/vasylpavliv'
+                            f'SIGNAL {p["direction"]}\n\n'
+                            f'{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                            'Timeframe: 10m\n'
+                            f'Start: {kyiv(p["start_ts"])} Kyiv time\n'
+                            'Confirmed: candles #6, #7, #8\n\n'
+                            'Signal only - no automatic trading.\n\n'
+                            'Трейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv'
                         )
                         tg(signal_text, signal_text)
                         p['signal_sent'] = True
@@ -257,9 +257,9 @@ class Engine:
                 log.info('RESULT WIN | %s | start=%s | result candle=%d',
                          p['direction'], utc(p['start_ts']), rel + 6)
                 tg(
-                    f'WIN\\n{self.symbol.replace("_USDT", "USDT")} Futures\\n'
-                    f'Direction: {p["direction"]}\\nResult candle: {rel + 6}/15\\n\\n'
-                    'Трейдер Василь Павлів\\n@vasylpavliv\\nhttps://t.me/vasylpavliv'
+                    f'WIN\n{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                    f'Direction: {p["direction"]}\nResult candle: {rel + 6}/15\n\n'
+                    'Трейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv'
                 )
                 continue
 
@@ -270,10 +270,10 @@ class Engine:
                     log.info('RESULT LOSS | %s | start=%s | all candles #9-#15 opposite START',
                              p['direction'], utc(p['start_ts']))
                     tg(
-                        f'LOSS\\n{self.symbol.replace("_USDT", "USDT")} Futures\\n'
-                        f'Direction: {p["direction"]}\\n'
-                        'All candles #9-#15 were opposite to START\\n\\n'
-                        'Трейдер Василь Павлів\\n@vasylpavliv\\nhttps://t.me/vasylpavliv'
+                        f'LOSS\n{self.symbol.replace("_USDT", "USDT")} Futures\n'
+                        f'Direction: {p["direction"]}\n'
+                        'All candles #9-#15 were opposite to START\n\n'
+                        'Трейдер Василь Павлів\n@vasylpavliv\nhttps://t.me/vasylpavliv'
                     )
                 else:
                     log.info('NO WIN/LOSS | %s | start=%s | doji/other result in candles #9-#15',
